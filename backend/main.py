@@ -1,12 +1,13 @@
 import os
+import asyncio
 import requests
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google.cloud import texttospeech
+import edge_tts
 import replicate
 
-app = FastAPI(title="AI Talking Avatar Generator API")
+app = FastAPI(title="AI Talking Avatar Generator (No-Card Version)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,27 +20,30 @@ app.add_middleware(
 class GenerationRequest(BaseModel):
     project_id: str
     script_text: str
-    voice_name: str = "en-US-Journey-F"  # Default Google Neural/Journey voice
+    voice_name: str = "en-US-AriaNeural"  # Default Microsoft Edge neural voice
     image_url: str
 
 PROJECT_DATABASE = {}
 
+async def generate_audio_edge(text: str, voice: str, output_path: str):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(output_path)
+
 def process_video_pipeline(project_id: str, script_text: str, voice_name: str, image_url: str):
     try:
-        # Step 1: Google Cloud TTS
+        # Step 1: Free Edge Text-to-Speech
         PROJECT_DATABASE[project_id] = {"status": "PROCESSING_VOICE", "progress": 20}
         
-        client = texttospeech.TextToSpeechClient()
-        synthesis_input = texttospeech.SynthesisInput(text=script_text)
-        lang_code = voice_name[:5] if len(voice_name) >= 5 else "en-US"
+        temp_audio_file = f"/tmp/{project_id}.mp3"
         
-        voice = texttospeech.VoiceSelectionParams(language_code=lang_code, name=voice_name)
-        audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+        # Run async edge-tts inside sync background task
+        asyncio.run(generate_audio_edge(script_text, voice_name, temp_audio_file))
         
-        response = client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
-        
-        # Helper storage function simulation (In production, push response.audio_content to S3)
-        audio_url = upload_to_temp_storage(response.audio_content, "audio.mp3")
+        with open(temp_audio_file, "rb") as f:
+            audio_bytes = f.read()
+
+        # Helper storage function simulation (In production, push audio_bytes to S3/Cloudinary)
+        audio_url = upload_to_temp_storage(audio_bytes, "audio.mp3")
 
         # Step 2: Fal.ai Image-to-Video (Wan 2.1)
         PROJECT_DATABASE[project_id].update({"status": "PROCESSING_VIDEO", "progress": 50, "audio_url": audio_url})
